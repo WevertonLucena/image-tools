@@ -25,4 +25,10 @@ export interface EditorState {
   activeHandle: ResizeHandle | null;
 }
 
-export type ImageAction = "crop";
+export type ImageAction = "crop" | "remove-bg";
+
+export interface RGBColor {
+  r: number;
+  g: number;
+  b: number;
+}

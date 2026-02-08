@@ -1,4 +1,4 @@
-import { SelectionRect } from "@/types";
+import { SelectionRect, RGBColor } from "@/types";
 import { normalizeRect, getHandlePositions, HANDLE_SIZE } from "./geometry";
 
 export function drawEditor(
@@ -144,5 +144,130 @@ export function cropImage(
     Math.round(clampedH)
   );
 
+  return offscreen.toDataURL("image/png");
+}
+
+export function getPixelColor(
+  image: HTMLImageElement,
+  canvasX: number,
+  canvasY: number,
+  scale: number,
+  offsetX: number,
+  offsetY: number
+): RGBColor | null {
+  const imgX = Math.round((canvasX - offsetX) / scale);
+  const imgY = Math.round((canvasY - offsetY) / scale);
+
+  if (imgX < 0 || imgY < 0 || imgX >= image.naturalWidth || imgY >= image.naturalHeight) {
+    return null;
+  }
+
+  const offscreen = document.createElement("canvas");
+  offscreen.width = image.naturalWidth;
+  offscreen.height = image.naturalHeight;
+  const ctx = offscreen.getContext("2d")!;
+  ctx.drawImage(image, 0, 0);
+
+  const pixel = ctx.getImageData(imgX, imgY, 1, 1).data;
+  return { r: pixel[0], g: pixel[1], b: pixel[2] };
+}
+
+export function detectBackgroundColor(image: HTMLImageElement): RGBColor {
+  const offscreen = document.createElement("canvas");
+  offscreen.width = image.naturalWidth;
+  offscreen.height = image.naturalHeight;
+  const ctx = offscreen.getContext("2d")!;
+  ctx.drawImage(image, 0, 0);
+
+  // Sample pixels from the edges of the image
+  const w = image.naturalWidth;
+  const h = image.naturalHeight;
+  const sampleCount = Math.min(200, (w + h) * 2);
+  const colors: RGBColor[] = [];
+
+  const addSample = (x: number, y: number) => {
+    const cx = Math.max(0, Math.min(w - 1, Math.round(x)));
+    const cy = Math.max(0, Math.min(h - 1, Math.round(y)));
+    const pixel = ctx.getImageData(cx, cy, 1, 1).data;
+    colors.push({ r: pixel[0], g: pixel[1], b: pixel[2] });
+  };
+
+  const step = Math.max(1, Math.floor((w + h) * 2 / sampleCount));
+  for (let i = 0; i < w; i += step) {
+    addSample(i, 0);
+    addSample(i, h - 1);
+  }
+  for (let i = 0; i < h; i += step) {
+    addSample(0, i);
+    addSample(w - 1, i);
+  }
+
+  // Find the most common color (simple bucketing)
+  const bucketSize = 16;
+  const buckets = new Map<string, { count: number; totalR: number; totalG: number; totalB: number }>();
+
+  for (const c of colors) {
+    const key = `${Math.floor(c.r / bucketSize)},${Math.floor(c.g / bucketSize)},${Math.floor(c.b / bucketSize)}`;
+    const bucket = buckets.get(key) || { count: 0, totalR: 0, totalG: 0, totalB: 0 };
+    bucket.count++;
+    bucket.totalR += c.r;
+    bucket.totalG += c.g;
+    bucket.totalB += c.b;
+    buckets.set(key, bucket);
+  }
+
+  let bestBucket = { count: 0, totalR: 255, totalG: 255, totalB: 255 };
+  for (const bucket of buckets.values()) {
+    if (bucket.count > bestBucket.count) {
+      bestBucket = bucket;
+    }
+  }
+
+  return {
+    r: Math.round(bestBucket.totalR / bestBucket.count),
+    g: Math.round(bestBucket.totalG / bestBucket.count),
+    b: Math.round(bestBucket.totalB / bestBucket.count),
+  };
+}
+
+export function removeBackground(
+  image: HTMLImageElement,
+  targetColor: RGBColor,
+  tolerance: number
+): string {
+  const offscreen = document.createElement("canvas");
+  offscreen.width = image.naturalWidth;
+  offscreen.height = image.naturalHeight;
+  const ctx = offscreen.getContext("2d")!;
+  ctx.drawImage(image, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, offscreen.width, offscreen.height);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    const distance = Math.sqrt(
+      (r - targetColor.r) ** 2 +
+      (g - targetColor.g) ** 2 +
+      (b - targetColor.b) ** 2
+    );
+
+    // Max possible distance is ~441 (sqrt(255^2 * 3))
+    const maxDistance = 441;
+    const threshold = (tolerance / 100) * maxDistance;
+
+    if (distance <= threshold) {
+      // Fully transparent for colors within threshold
+      const alpha = distance <= threshold * 0.7
+        ? 0
+        : Math.round(255 * ((distance - threshold * 0.7) / (threshold * 0.3)));
+      data[i + 3] = alpha;
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
   return offscreen.toDataURL("image/png");
 }

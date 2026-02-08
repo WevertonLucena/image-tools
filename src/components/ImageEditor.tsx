@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useRef, useState, useCallback, useEffect } from "react";
-import { SelectionRect, ResizeHandle, InteractionMode } from "@/types";
+import { SelectionRect, ResizeHandle, InteractionMode, RGBColor } from "@/types";
 import {
   normalizeRect,
   hitTestHandle,
@@ -9,8 +9,8 @@ import {
   getResizeCursor,
   applyResize,
 } from "@/utils/geometry";
-import { drawEditor, cropImage } from "@/utils/canvas";
-import { Crop, Download, RotateCcw, X } from "lucide-react";
+import { drawEditor, cropImage, getPixelColor, detectBackgroundColor, removeBackground } from "@/utils/canvas";
+import { Crop, Download, RotateCcw, X, Eraser, Pipette, Wand2 } from "lucide-react";
 
 interface ImageEditorProps {
   imageSrc: string;
@@ -29,6 +29,11 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
   const [croppedImage, setCroppedImage] = useState<string | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [imageLayout, setImageLayout] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
+  const [removeBgMode, setRemoveBgMode] = useState(false);
+  const [pickingColor, setPickingColor] = useState(false);
+  const [bgColor, setBgColor] = useState<RGBColor | null>(null);
+  const [tolerance, setTolerance] = useState(10);
+  const [processedImage, setProcessedImage] = useState<string | null>(null);
 
   const dragStart = useRef({ x: 0, y: 0 });
   const selectionStart = useRef<SelectionRect | null>(null);
@@ -107,7 +112,23 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (croppedImage) return;
+    if (croppedImage || processedImage) return;
+
+    // Color picking mode for background removal
+    if (removeBgMode && pickingColor) {
+      const pos = getCanvasCoords(e);
+      const img = imageRef.current;
+      if (!img) return;
+      const color = getPixelColor(img, pos.x, pos.y, imageLayout.scale, imageLayout.offsetX, imageLayout.offsetY);
+      if (color) {
+        setBgColor(color);
+        setPickingColor(false);
+      }
+      return;
+    }
+
+    if (removeBgMode) return;
+
     const pos = getCanvasCoords(e);
     dragStart.current = pos;
 
@@ -133,7 +154,12 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (croppedImage) return;
+    if (croppedImage || processedImage) return;
+    if (removeBgMode && pickingColor) {
+      setCursorStyle("crosshair");
+      return;
+    }
+    if (removeBgMode) return;
     const pos = getCanvasCoords(e);
 
     if (interactionMode === "idle") {
@@ -213,6 +239,59 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
   const handleClearSelection = () => {
     setSelection(null);
     setCroppedImage(null);
+    setProcessedImage(null);
+  };
+
+  const handleEnterRemoveBg = () => {
+    setRemoveBgMode(true);
+    setSelection(null);
+    setCroppedImage(null);
+    setProcessedImage(null);
+    // Auto-detect background color
+    const img = imageRef.current;
+    if (img) {
+      const detected = detectBackgroundColor(img);
+      setBgColor(detected);
+    }
+  };
+
+  const handleExitRemoveBg = () => {
+    setRemoveBgMode(false);
+    setPickingColor(false);
+    setBgColor(null);
+    setProcessedImage(null);
+    // Re-render canvas with the original image
+    const img = imageRef.current;
+    if (img) computeLayout(img);
+  };
+
+  const handleApplyRemoveBg = () => {
+    const img = imageRef.current;
+    if (!img || !bgColor) return;
+    const result = removeBackground(img, bgColor, tolerance);
+    setProcessedImage(result);
+  };
+
+  const handleUseProcessed = () => {
+    if (!processedImage) return;
+    const img = new Image();
+    img.onload = () => {
+      imageRef.current = img;
+      setProcessedImage(null);
+      setRemoveBgMode(false);
+      setBgColor(null);
+      setPickingColor(false);
+      computeLayout(img);
+    };
+    img.src = processedImage;
+  };
+
+  const handleDownloadProcessed = () => {
+    if (!processedImage) return;
+    const link = document.createElement("a");
+    link.download = "transparent-bg.png";
+    link.href = processedImage;
+    link.click();
   };
 
   const handleUseCropped = () => {
@@ -230,6 +309,9 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
 
   const selNorm = selection ? normalizeRect(selection) : null;
   const hasValidSelection = selNorm && selNorm.width > 5 && selNorm.height > 5;
+  const showingResult = croppedImage || processedImage;
+  const resultImage = croppedImage || processedImage;
+  const resultLabel = croppedImage ? "Cropped Result" : "Transparent Background";
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -240,9 +322,9 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
       >
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-semibold tracking-wide opacity-70 uppercase">
-            Editor
+            {removeBgMode ? "Remove Background" : "Editor"}
           </h2>
-          {hasValidSelection && !croppedImage && (
+          {hasValidSelection && !showingResult && !removeBgMode && (
             <span
               className="text-xs px-2 py-0.5 rounded-full font-mono"
               style={{ background: "var(--accent)", color: "#fff" }}
@@ -251,25 +333,40 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
               {Math.round(selNorm!.height / imageLayout.scale)}px
             </span>
           )}
+          {removeBgMode && bgColor && !processedImage && (
+            <div className="flex items-center gap-2">
+              <div
+                className="w-5 h-5 rounded border"
+                style={{
+                  backgroundColor: `rgb(${bgColor.r}, ${bgColor.g}, ${bgColor.b})`,
+                  borderColor: "var(--border)",
+                }}
+                title={`RGB(${bgColor.r}, ${bgColor.g}, ${bgColor.b})`}
+              />
+              <span className="text-xs font-mono opacity-60">
+                RGB({bgColor.r}, {bgColor.g}, {bgColor.b})
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
-          {croppedImage ? (
+          {showingResult ? (
             <>
               <button
-                onClick={handleUseCropped}
+                onClick={croppedImage ? handleUseCropped : handleUseProcessed}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
                 style={{
                   background: "var(--accent)",
                   color: "#fff",
                 }}
-                title="Use cropped image as new source"
+                title="Use result as new source"
               >
-                <Crop size={15} />
+                {croppedImage ? <Crop size={15} /> : <Eraser size={15} />}
                 Use as Source
               </button>
               <button
-                onClick={handleDownload}
+                onClick={croppedImage ? handleDownload : handleDownloadProcessed}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
                 style={{
                   background: "var(--success)",
@@ -280,7 +377,77 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
                 Download
               </button>
               <button
-                onClick={handleClearSelection}
+                onClick={() => {
+                  handleClearSelection();
+                  if (processedImage) handleExitRemoveBg();
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                style={{
+                  background: "var(--surface-hover)",
+                  color: "var(--foreground)",
+                }}
+              >
+                <X size={15} />
+                Cancel
+              </button>
+            </>
+          ) : removeBgMode ? (
+            <>
+              <button
+                onClick={() => setPickingColor(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                style={{
+                  background: pickingColor ? "var(--accent)" : "var(--surface-hover)",
+                  color: pickingColor ? "#fff" : "var(--foreground)",
+                  boxShadow: pickingColor ? "0 0 12px var(--accent-glow)" : "none",
+                }}
+                title="Click on the image to pick the background color"
+              >
+                <Pipette size={15} />
+                Pick Color
+              </button>
+              <button
+                onClick={() => {
+                  const img = imageRef.current;
+                  if (img) setBgColor(detectBackgroundColor(img));
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                style={{
+                  background: "var(--surface-hover)",
+                  color: "var(--foreground)",
+                }}
+                title="Auto-detect background color from image edges"
+              >
+                <Wand2 size={15} />
+                Auto Detect
+              </button>
+              <div className="flex items-center gap-2 px-2">
+                <span className="text-xs opacity-50 whitespace-nowrap">Tolerance</span>
+                <input
+                  type="range"
+                  min="1"
+                  max="60"
+                  value={tolerance}
+                  onChange={(e) => setTolerance(Number(e.target.value))}
+                  className="w-24 accent-[#6366f1]"
+                />
+                <span className="text-xs font-mono w-6 text-right opacity-70">{tolerance}</span>
+              </div>
+              {bgColor && (
+                <button
+                  onClick={handleApplyRemoveBg}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:brightness-110"
+                  style={{
+                    background: "var(--accent)",
+                    color: "#fff",
+                  }}
+                >
+                  <Eraser size={15} />
+                  Apply
+                </button>
+              )}
+              <button
+                onClick={handleExitRemoveBg}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
                 style={{
                   background: "var(--surface-hover)",
@@ -319,6 +486,22 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
                   </button>
                 </>
               )}
+              <div
+                className="w-px h-5 mx-1"
+                style={{ background: "var(--border)" }}
+              />
+              <button
+                onClick={handleEnterRemoveBg}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                style={{
+                  background: "var(--surface-hover)",
+                  color: "var(--foreground)",
+                }}
+                title="Remove background color and make it transparent"
+              >
+                <Eraser size={15} />
+                Transparent BG
+              </button>
               <button
                 onClick={onReset}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
@@ -342,12 +525,12 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
         className="flex-1 relative overflow-hidden"
         style={{ background: "#0c0c10" }}
       >
-        {!croppedImage ? (
+        {!showingResult ? (
           <canvas
             ref={canvasRef}
             width={canvasSize.width}
             height={canvasSize.height}
-            style={{ cursor: cursorStyle }}
+            style={{ cursor: removeBgMode && pickingColor ? "crosshair" : cursorStyle }}
             className="absolute inset-0"
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -357,19 +540,30 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
         ) : (
           <div className="flex items-center justify-center h-full p-8">
             <div className="flex flex-col items-center gap-4">
-              <p className="text-sm opacity-60 font-medium">Cropped Result</p>
-              <img
-                src={croppedImage}
-                alt="Cropped"
-                className="max-w-full max-h-[70vh] rounded-lg shadow-2xl"
-                style={{ border: "2px solid var(--border)" }}
-              />
+              <p className="text-sm opacity-60 font-medium">{resultLabel}</p>
+              <div
+                className="rounded-lg shadow-2xl overflow-hidden"
+                style={{
+                  border: "2px solid var(--border)",
+                  backgroundImage: processedImage
+                    ? "repeating-conic-gradient(#808080 0% 25%, #c0c0c0 0% 50%)"
+                    : "none",
+                  backgroundSize: processedImage ? "16px 16px" : "auto",
+                  backgroundColor: processedImage ? "transparent" : "var(--surface)",
+                }}
+              >
+                <img
+                  src={resultImage!}
+                  alt="Result"
+                  className="max-w-full max-h-[70vh]"
+                />
+              </div>
             </div>
           </div>
         )}
 
         {/* Instructions overlay */}
-        {!selection && !croppedImage && (
+        {!showingResult && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-none">
             <div
               className="px-4 py-2 rounded-full text-xs font-medium backdrop-blur-sm"
@@ -379,7 +573,13 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
                 border: "1px solid rgba(99, 102, 241, 0.2)",
               }}
             >
-              Click and drag to select an area to crop
+              {removeBgMode
+                ? pickingColor
+                  ? "Click on the color you want to make transparent"
+                  : "Pick a color or use Auto Detect, then adjust tolerance and Apply"
+                : !selection
+                  ? "Click and drag to select an area to crop"
+                  : "Drag to move, use handles to resize, or click outside to draw a new selection"}
             </div>
           </div>
         )}
