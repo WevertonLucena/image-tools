@@ -1,14 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import ImageUpload from "@/components/ImageUpload";
-import ImageEditor from "@/components/ImageEditor";
-import { ImageIcon, Music } from "lucide-react";
+import AudioConverter from "@/components/AudioConverter";
+import { Music, ImageIcon } from "lucide-react";
 import Link from "next/link";
 
-export default function Home() {
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
-
+export default function AudioPage() {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden">
       {/* Header */}
@@ -21,36 +17,29 @@ export default function Home() {
             className="w-8 h-8 rounded-lg flex items-center justify-center"
             style={{ background: "var(--accent)" }}
           >
-            <ImageIcon size={16} color="#fff" />
+            <Music size={16} color="#fff" />
           </div>
           <div>
-            <h1 className="text-sm font-bold tracking-tight">Image Handler</h1>
-            <p className="text-[11px] opacity-40">Crop & process your images</p>
+            <h1 className="text-sm font-bold tracking-tight">Audio Converter</h1>
+            <p className="text-[11px] opacity-40">MP3 to WAV · Mono · 16-bit PCM</p>
           </div>
         </div>
         <Link
-          href="/audio"
+          href="/"
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
           style={{
             background: "var(--surface-hover)",
             color: "var(--foreground)",
           }}
         >
-          <Music size={15} />
-          Audio Converter
+          <ImageIcon size={15} />
+          Image Tools
         </Link>
       </header>
 
       {/* Main content */}
       <main className="flex-1 overflow-hidden">
-        {imageSrc ? (
-          <ImageEditor
-            imageSrc={imageSrc}
-            onReset={() => setImageSrc(null)}
-          />
-        ) : (
-          <ImageUpload onImageLoad={setImageSrc} />
-        )}
+        <AudioConverter />
       </main>
     </div>
   );

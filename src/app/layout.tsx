@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Image Handler",
-  description: "Upload, select, and crop images with precision",
+  title: "Image & Audio Tools",
+  description: "Image processing and audio conversion tools",
 };
 
 export default function RootLayout({
