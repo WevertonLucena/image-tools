@@ -9,8 +9,8 @@ import {
   getResizeCursor,
   applyResize,
 } from "@/utils/geometry";
-import { drawEditor, cropImage, getPixelColor, detectBackgroundColor, removeBackground } from "@/utils/canvas";
-import { Crop, Download, RotateCcw, X, Eraser, Pipette, Wand2 } from "lucide-react";
+import { drawEditor, cropImage, getPixelColor, detectBackgroundColor, removeBackground, resizeImage } from "@/utils/canvas";
+import { Crop, Download, RotateCcw, X, Eraser, Pipette, Wand2, Scaling, Lock, Unlock } from "lucide-react";
 
 interface ImageEditorProps {
   imageSrc: string;
@@ -34,6 +34,11 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
   const [bgColor, setBgColor] = useState<RGBColor | null>(null);
   const [tolerance, setTolerance] = useState(10);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
+  const [resizeMode, setResizeMode] = useState(false);
+  const [resizeWidth, setResizeWidth] = useState(0);
+  const [resizeHeight, setResizeHeight] = useState(0);
+  const [lockAspect, setLockAspect] = useState(true);
+  const [aspectRatio, setAspectRatio] = useState(1);
 
   const dragStart = useRef({ x: 0, y: 0 });
   const selectionStart = useRef<SelectionRect | null>(null);
@@ -113,6 +118,7 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (croppedImage || processedImage) return;
+    if (resizeMode) return;
 
     // Color picking mode for background removal
     if (removeBgMode && pickingColor) {
@@ -155,6 +161,7 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (croppedImage || processedImage) return;
+    if (resizeMode) return;
     if (removeBgMode && pickingColor) {
       setCursorStyle("crosshair");
       return;
@@ -294,6 +301,68 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
     link.click();
   };
 
+  const handleEnterResize = () => {
+    const img = imageRef.current;
+    if (!img) return;
+    setResizeMode(true);
+    setSelection(null);
+    setCroppedImage(null);
+    setProcessedImage(null);
+    setResizeWidth(img.naturalWidth);
+    setResizeHeight(img.naturalHeight);
+    setAspectRatio(img.naturalWidth / img.naturalHeight);
+    setLockAspect(true);
+  };
+
+  const handleExitResize = () => {
+    setResizeMode(false);
+    const img = imageRef.current;
+    if (img) computeLayout(img);
+  };
+
+  const handleResizeWidthChange = (val: number) => {
+    const w = Math.max(1, val);
+    setResizeWidth(w);
+    if (lockAspect) {
+      setResizeHeight(Math.round(w / aspectRatio));
+    }
+  };
+
+  const handleResizeHeightChange = (val: number) => {
+    const h = Math.max(1, val);
+    setResizeHeight(h);
+    if (lockAspect) {
+      setResizeWidth(Math.round(h * aspectRatio));
+    }
+  };
+
+  const handleApplyResize = () => {
+    const img = imageRef.current;
+    if (!img || resizeWidth < 1 || resizeHeight < 1) return;
+    const result = resizeImage(img, resizeWidth, resizeHeight);
+    setProcessedImage(result);
+  };
+
+  const handleDownloadResized = () => {
+    if (!processedImage) return;
+    const link = document.createElement("a");
+    link.download = "resized-image.png";
+    link.href = processedImage;
+    link.click();
+  };
+
+  const handleUseResized = () => {
+    if (!processedImage) return;
+    const img = new Image();
+    img.onload = () => {
+      imageRef.current = img;
+      setProcessedImage(null);
+      setResizeMode(false);
+      computeLayout(img);
+    };
+    img.src = processedImage;
+  };
+
   const handleUseCropped = () => {
     if (!croppedImage) return;
     // Load the cropped image as the new working image
@@ -311,7 +380,12 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
   const hasValidSelection = selNorm && selNorm.width > 5 && selNorm.height > 5;
   const showingResult = croppedImage || processedImage;
   const resultImage = croppedImage || processedImage;
-  const resultLabel = croppedImage ? "Cropped Result" : "Transparent Background";
+  const resultLabel = croppedImage
+    ? "Cropped Result"
+    : resizeMode
+      ? "Resized Image"
+      : "Transparent Background";
+  const activeMode = removeBgMode ? "bg" : resizeMode ? "resize" : "default";
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -322,7 +396,7 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
       >
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-semibold tracking-wide opacity-70 uppercase">
-            {removeBgMode ? "Remove Background" : "Editor"}
+            {removeBgMode ? "Remove Background" : resizeMode ? "Resize Image" : "Editor"}
           </h2>
           {hasValidSelection && !showingResult && !removeBgMode && (
             <span
@@ -354,7 +428,13 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
           {showingResult ? (
             <>
               <button
-                onClick={croppedImage ? handleUseCropped : handleUseProcessed}
+                onClick={
+                  croppedImage
+                    ? handleUseCropped
+                    : resizeMode
+                      ? handleUseResized
+                      : handleUseProcessed
+                }
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
                 style={{
                   background: "var(--accent)",
@@ -362,11 +442,17 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
                 }}
                 title="Use result as new source"
               >
-                {croppedImage ? <Crop size={15} /> : <Eraser size={15} />}
+                {croppedImage ? <Crop size={15} /> : resizeMode ? <Scaling size={15} /> : <Eraser size={15} />}
                 Use as Source
               </button>
               <button
-                onClick={croppedImage ? handleDownload : handleDownloadProcessed}
+                onClick={
+                  croppedImage
+                    ? handleDownload
+                    : resizeMode
+                      ? handleDownloadResized
+                      : handleDownloadProcessed
+                }
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
                 style={{
                   background: "var(--success)",
@@ -379,8 +465,102 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
               <button
                 onClick={() => {
                   handleClearSelection();
-                  if (processedImage) handleExitRemoveBg();
+                  if (resizeMode) handleExitResize();
+                  else if (processedImage) handleExitRemoveBg();
                 }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                style={{
+                  background: "var(--surface-hover)",
+                  color: "var(--foreground)",
+                }}
+              >
+                <X size={15} />
+                Cancel
+              </button>
+            </>
+          ) : resizeMode ? (
+            <>
+              <div className="flex items-center gap-2">
+                <label className="text-xs opacity-50">W</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10000"
+                  value={resizeWidth}
+                  onChange={(e) => handleResizeWidthChange(Number(e.target.value))}
+                  className="w-20 px-2 py-1 rounded-lg text-sm font-mono text-center outline-none"
+                  style={{
+                    background: "var(--background)",
+                    color: "var(--foreground)",
+                    border: "1px solid var(--border)",
+                  }}
+                />
+                <button
+                  onClick={() => setLockAspect(!lockAspect)}
+                  className="p-1 rounded transition-all"
+                  style={{
+                    color: lockAspect ? "var(--accent)" : "var(--foreground)",
+                    opacity: lockAspect ? 1 : 0.4,
+                  }}
+                  title={lockAspect ? "Aspect ratio locked" : "Aspect ratio unlocked"}
+                >
+                  {lockAspect ? <Lock size={14} /> : <Unlock size={14} />}
+                </button>
+                <label className="text-xs opacity-50">H</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10000"
+                  value={resizeHeight}
+                  onChange={(e) => handleResizeHeightChange(Number(e.target.value))}
+                  className="w-20 px-2 py-1 rounded-lg text-sm font-mono text-center outline-none"
+                  style={{
+                    background: "var(--background)",
+                    color: "var(--foreground)",
+                    border: "1px solid var(--border)",
+                  }}
+                />
+                <span className="text-xs opacity-40">px</span>
+              </div>
+              {imageRef.current && (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => {
+                      const img = imageRef.current!;
+                      handleResizeWidthChange(Math.round(img.naturalWidth / 2));
+                    }}
+                    className="px-2 py-1 rounded-lg text-xs font-medium transition-all"
+                    style={{ background: "var(--surface-hover)", color: "var(--foreground)" }}
+                    title="50% of original"
+                  >
+                    50%
+                  </button>
+                  <button
+                    onClick={() => {
+                      const img = imageRef.current!;
+                      handleResizeWidthChange(Math.round(img.naturalWidth / 4));
+                    }}
+                    className="px-2 py-1 rounded-lg text-xs font-medium transition-all"
+                    style={{ background: "var(--surface-hover)", color: "var(--foreground)" }}
+                    title="25% of original"
+                  >
+                    25%
+                  </button>
+                </div>
+              )}
+              <button
+                onClick={handleApplyResize}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all hover:brightness-110"
+                style={{
+                  background: "var(--accent)",
+                  color: "#fff",
+                }}
+              >
+                <Scaling size={15} />
+                Apply
+              </button>
+              <button
+                onClick={handleExitResize}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
                 style={{
                   background: "var(--surface-hover)",
@@ -503,6 +683,18 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
                 Transparent BG
               </button>
               <button
+                onClick={handleEnterResize}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                style={{
+                  background: "var(--surface-hover)",
+                  color: "var(--foreground)",
+                }}
+                title="Resize the image dimensions"
+              >
+                <Scaling size={15} />
+                Resize
+              </button>
+              <button
                 onClick={onReset}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
                 style={{
@@ -577,9 +769,11 @@ export default function ImageEditor({ imageSrc, onReset }: ImageEditorProps) {
                 ? pickingColor
                   ? "Click on the color you want to make transparent"
                   : "Pick a color or use Auto Detect, then adjust tolerance and Apply"
-                : !selection
-                  ? "Click and drag to select an area to crop"
-                  : "Drag to move, use handles to resize, or click outside to draw a new selection"}
+                : resizeMode
+                  ? "Set the desired dimensions and click Apply"
+                  : !selection
+                    ? "Click and drag to select an area to crop"
+                    : "Drag to move, use handles to resize, or click outside to draw a new selection"}
             </div>
           </div>
         )}

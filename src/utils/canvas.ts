@@ -230,6 +230,23 @@ export function detectBackgroundColor(image: HTMLImageElement): RGBColor {
   };
 }
 
+export function resizeImage(
+  image: HTMLImageElement,
+  targetWidth: number,
+  targetHeight: number
+): string {
+  const offscreen = document.createElement("canvas");
+  offscreen.width = Math.round(targetWidth);
+  offscreen.height = Math.round(targetHeight);
+
+  const ctx = offscreen.getContext("2d")!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(image, 0, 0, offscreen.width, offscreen.height);
+
+  return offscreen.toDataURL("image/png");
+}
+
 export function removeBackground(
   image: HTMLImageElement,
   targetColor: RGBColor,
