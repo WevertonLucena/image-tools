@@ -230,6 +230,17 @@ export function detectBackgroundColor(image: HTMLImageElement): RGBColor {
   };
 }
 
+export function flipHorizontal(image: HTMLImageElement): string {
+  const offscreen = document.createElement("canvas");
+  offscreen.width = image.naturalWidth;
+  offscreen.height = image.naturalHeight;
+  const ctx = offscreen.getContext("2d")!;
+  ctx.translate(offscreen.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(image, 0, 0);
+  return offscreen.toDataURL("image/png");
+}
+
 export function resizeImage(
   image: HTMLImageElement,
   targetWidth: number,
@@ -244,6 +255,119 @@ export function resizeImage(
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(image, 0, 0, offscreen.width, offscreen.height);
 
+  return offscreen.toDataURL("image/png");
+}
+
+export function floodFill(
+  image: HTMLImageElement,
+  startX: number,
+  startY: number,
+  fillColor: RGBColor,
+  tolerance: number
+): string {
+  const w = image.naturalWidth;
+  const h = image.naturalHeight;
+
+  const offscreen = document.createElement("canvas");
+  offscreen.width = w;
+  offscreen.height = h;
+  const ctx = offscreen.getContext("2d")!;
+  ctx.drawImage(image, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+
+  // Clamp start position
+  const sx = Math.max(0, Math.min(w - 1, Math.round(startX)));
+  const sy = Math.max(0, Math.min(h - 1, Math.round(startY)));
+
+  // Get the color at the start position
+  const startIdx = (sy * w + sx) * 4;
+  const targetR = data[startIdx];
+  const targetG = data[startIdx + 1];
+  const targetB = data[startIdx + 2];
+  const targetA = data[startIdx + 3];
+
+  // If the fill color is the same as the target, do nothing
+  if (
+    targetR === fillColor.r &&
+    targetG === fillColor.g &&
+    targetB === fillColor.b &&
+    targetA === 255
+  ) {
+    return offscreen.toDataURL("image/png");
+  }
+
+  const maxDistance = 441;
+  const threshold = (tolerance / 100) * maxDistance;
+
+  const visited = new Uint8Array(w * h);
+
+  const matchesTarget = (idx: number): boolean => {
+    const r = data[idx];
+    const g = data[idx + 1];
+    const b = data[idx + 2];
+    const distance = Math.sqrt(
+      (r - targetR) ** 2 + (g - targetG) ** 2 + (b - targetB) ** 2
+    );
+    return distance <= threshold;
+  };
+
+  // Scanline flood fill for performance
+  const stack: [number, number][] = [[sx, sy]];
+
+  while (stack.length > 0) {
+    const [cx, cy] = stack.pop()!;
+    const pixelIdx = cy * w + cx;
+
+    if (visited[pixelIdx]) continue;
+
+    const dataIdx = pixelIdx * 4;
+    if (!matchesTarget(dataIdx)) continue;
+
+    // Scan left
+    let left = cx;
+    while (left > 0) {
+      const li = (cy * w + (left - 1));
+      if (visited[li] || !matchesTarget(li * 4)) break;
+      left--;
+    }
+
+    // Scan right
+    let right = cx;
+    while (right < w - 1) {
+      const ri = (cy * w + (right + 1));
+      if (visited[ri] || !matchesTarget(ri * 4)) break;
+      right++;
+    }
+
+    // Fill the scanline and check above/below
+    for (let x = left; x <= right; x++) {
+      const pi = cy * w + x;
+      visited[pi] = 1;
+      const di = pi * 4;
+      data[di] = fillColor.r;
+      data[di + 1] = fillColor.g;
+      data[di + 2] = fillColor.b;
+      data[di + 3] = 255;
+
+      // Push pixels above and below
+      if (cy > 0) {
+        const aboveIdx = (cy - 1) * w + x;
+        if (!visited[aboveIdx] && matchesTarget(aboveIdx * 4)) {
+          stack.push([x, cy - 1]);
+        }
+      }
+      if (cy < h - 1) {
+        const belowIdx = (cy + 1) * w + x;
+        if (!visited[belowIdx] && matchesTarget(belowIdx * 4)) {
+          stack.push([x, cy + 1]);
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
   return offscreen.toDataURL("image/png");
 }
 
